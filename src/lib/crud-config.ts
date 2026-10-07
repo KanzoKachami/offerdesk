@@ -72,6 +72,14 @@ export const TABLES: Record<string, TableConfig> = {
       { name: "is_me", label: "Это я", type: "checkbox" },
     ],
   },
+  sheets: {
+    pk: "id",
+    fields: [
+      { name: "name", label: "Название", type: "text", required: true, placeholder: "Потоки Gambleon" },
+      { name: "url", label: "Ссылка", type: "text", required: true, placeholder: "https://docs.google.com/spreadsheets/…", wide: true },
+      { name: "notes", label: "Заметка", type: "textarea", wide: true },
+    ],
+  },
   webmasters: {
     pk: "id",
     fields: [

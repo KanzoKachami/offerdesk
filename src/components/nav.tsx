@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import clsx from "clsx";
-import { Inbox, FileText, Package, Building2, Users, UserCheck, Globe2, Settings, Rocket } from "lucide-react";
+import { Inbox, FileText, Package, Building2, Users, UserCheck, Globe2, Settings, Rocket, Table2 } from "lucide-react";
 
 const ITEMS: { href: string; label: string; icon: typeof Inbox; soon?: boolean }[] = [
   { href: "/", label: "Очередь", icon: Inbox },
@@ -14,6 +14,7 @@ const ITEMS: { href: string; label: string; icon: typeof Inbox; soon?: boolean }
   { href: "/managers", label: "Менеджеры", icon: Users },
   { href: "/assignees", label: "Адресаты", icon: UserCheck },
   { href: "/webmasters", label: "Вебмастера", icon: Globe2 },
+  { href: "/sheets", label: "Таблицы", icon: Table2 },
   { href: "/settings", label: "Настройки", icon: Settings },
 ];
 
