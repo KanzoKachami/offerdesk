@@ -23,6 +23,19 @@ export function Nav() {
     <nav className="space-y-0.5">
       {ITEMS.map(({ href, label, icon: Icon, soon }) => {
         const active = href === "/" ? path === "/" : path.startsWith(href);
+        if (soon)
+          return (
+            <div
+              key={href}
+              title="Раздел в разработке"
+              aria-disabled="true"
+              className="flex cursor-not-allowed select-none items-center gap-2.5 rounded-lg px-3 py-2 text-sm font-medium text-slate-300"
+            >
+              <Icon size={17} strokeWidth={2} />
+              <span className="flex-1">{label}</span>
+              <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-slate-400">скоро</span>
+            </div>
+          );
         return (
           <Link
             key={href}
@@ -34,7 +47,6 @@ export function Nav() {
           >
             <Icon size={17} strokeWidth={2} />
             <span className="flex-1">{label}</span>
-            {soon && <span className="text-[10px] font-semibold uppercase text-slate-400">скоро</span>}
           </Link>
         );
       })}
