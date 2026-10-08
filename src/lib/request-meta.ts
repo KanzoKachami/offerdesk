@@ -83,3 +83,11 @@ export const LAUNCH_STAGE: Record<string, { label: string; tone: "slate" | "indi
 
 /** Статусы, которые можно выбрать вручную (порядок = путь потока). */
 export const STREAM_STAGES = ["waiting_link", "at_integrator", "integrated", "live", "stopped", "no_traffic"] as const;
+
+// Статусы свободных кап
+export const CAP_STATUS: Record<string, { label: string; tone: "slate" | "indigo" | "green" | "amber" | "rose" }> = {
+  free: { label: "Свободна", tone: "green" },
+  offered: { label: "Предложена", tone: "amber" },
+  issued: { label: "Выдана", tone: "indigo" },
+  gone: { label: "Сгорела / неактуальна", tone: "slate" },
+};

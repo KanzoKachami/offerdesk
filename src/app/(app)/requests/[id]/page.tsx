@@ -19,6 +19,9 @@ import {
   updateRequest,
 } from "@/lib/request-actions";
 import { loadSettings, slaAlert } from "@/lib/request-data";
+import { issueCap, offerCap, releaseCap } from "@/lib/caps-actions";
+import { capLine, capMatches } from "@/lib/cap-match";
+import type { FreeCap } from "@/lib/caps-data";
 import { advertiserReplyText, advertiserText, managerText, managersAskText, type TextItem } from "@/lib/request-texts";
 import { ITEM_STATUS, PRIORITY, REQUEST_TYPE, hoursLabel, rateLabel } from "@/lib/request-meta";
 import { Badge, Card, Empty, Flash, PageHeader, btnCls, inputCls } from "@/components/ui";
@@ -161,10 +164,24 @@ export default async function RequestCard({ params, searchParams }: { params: Pr
       })
   );
 
+  // Свободные капы по гео запроса: сначала предлагаем их (подмена — рекл не знает)
+  const { data: capRows } = !isAdv && items.length
+    ? await sb.from("v_free_caps").select("*").in("geo_code", [...new Set(items.map((it) => it.geo_code))]).in("status", ["free", "offered", "issued"])
+    : { data: [] };
+  const allCaps = (capRows ?? []) as FreeCap[];
+  const capsFor = (it: Item) => {
+    const mine = allCaps.filter((c) => c.item_id === it.id && c.status !== "free");
+    const free = allCaps
+      .filter((c) => c.status === "free" && capMatches(it, req, c))
+      .sort((a, b) => Number(Boolean(b.offer_id === it.offer_id)) - Number(Boolean(a.offer_id === it.offer_id)) || b.days_free - a.days_free);
+    return { mine, free };
+  };
+
   // Тексты
   const textReq = { number: req.number, webmaster_name: req.webmaster_name, source_code: req.source_code, approach_code: req.approach_code, is_inhouse: req.is_inhouse };
   const textItems: TextItem[] = items.map((it) => ({
     ...it,
+    caps: capsFor(it).mine.map((c) => capLine(c)),
     offers: it.item_offers
       .filter((io) => io.status !== "cancelled")
       .map((io) => ({
@@ -189,7 +206,7 @@ export default async function RequestCard({ params, searchParams }: { params: Pr
       byAdv.set(advId, g);
     }
   });
-  const anyAnswer = !isAdv && items.some((it) => it.item_offers.some((io) => io.status === "answered") || it.status === "closed");
+  const anyAnswer = !isAdv && items.some((it) => it.item_offers.some((io) => io.status === "answered") || it.status === "closed" || capsFor(it).mine.length > 0);
 
   // «От рекла»: тексты менеджерам и ответ реклу
   const openGeos = items.filter((it) => !["closed", "archived"].includes(it.status)).map((it) => it.geo_code);
@@ -477,6 +494,56 @@ export default async function RequestCard({ params, searchParams }: { params: Pr
                     </ActionForm>
                   </details>
                 )}
+
+                {/* Свободные капы на подмену — первыми */}
+                {!isAdv &&
+                  (() => {
+                    const { mine, free } = capsFor(it);
+                    if (!mine.length && !(live && free.length)) return null;
+                    const capF = (c: FreeCap) => ({ cap_id: c.id, item_id: it.id, _path: path });
+                    return (
+                      <div className="mb-3 rounded-lg border border-emerald-200 bg-emerald-50/60 p-3">
+                        <div className="mb-2 text-sm font-semibold text-emerald-900">
+                          🔁 Свободные капы на подмену {live && free.length ? `· подходит ${free.length}` : ""}
+                          <span className="ml-2 text-xs font-normal text-emerald-700">условия уже согласованы, рекл про подмену не знает</span>
+                        </div>
+                        <div className="space-y-1.5">
+                          {[...mine, ...(live ? free.slice(0, 8) : [])].map((c) => (
+                            <div key={c.id} className="flex flex-wrap items-center gap-2 rounded-md bg-white px-2.5 py-1.5 text-xs">
+                              <span className="font-semibold text-slate-900">{capLine(c)}</span>
+                              <span className="text-slate-400">
+                                {c.advertiser_name} · свободна {c.days_free} дн{c.released_by ? ` · ушёл ${c.released_by}` : ""}
+                              </span>
+                              {c.status === "offered" && <Badge tone="amber">предложена</Badge>}
+                              {c.status === "issued" && <Badge tone="indigo">выдана</Badge>}
+                              <span className="ml-auto flex gap-1">
+                                {c.status === "free" && (
+                                  <Act action={offerCap} fields={capF(c)}>
+                                    Предложить
+                                  </Act>
+                                )}
+                                {c.status !== "issued" && live && (
+                                  <Act action={issueCap} fields={capF(c)} tone="primary">
+                                    Выдать
+                                  </Act>
+                                )}
+                                {c.status !== "free" && (
+                                  <Act action={releaseCap} fields={capF(c)} tone="ghost">
+                                    Вернуть в свободные
+                                  </Act>
+                                )}
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                        {live && free.length > 8 && (
+                          <Link href={`/caps?geo=${it.geo_code}`} className="mt-1 inline-block text-xs text-emerald-800 underline">
+                            ещё {free.length - 8} — все капы по {it.geo_code}
+                          </Link>
+                        )}
+                      </div>
+                    );
+                  })()}
 
                 {/* Подбор офферов */}
                 {live && cand && (

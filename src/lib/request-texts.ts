@@ -28,6 +28,8 @@ export type TextItem = {
     conditions: string | null;
     currency: string;
   }[];
+  /** Свободные капы, предложенные/выданные на подмену: готовые строки «CRUSADO [FB] — кап 20, $240 (ID 118185)» */
+  caps?: string[];
 };
 
 /** Сообщение реклу по его офферам из запроса. */
@@ -56,6 +58,8 @@ export function managerText(r: TextRequest, items: TextItem[]) {
   const head = `Ответ по запросу #${r.number}${r.webmaster_name ? ` (${r.webmaster_name})` : ""}:`;
   const rows = items.map((it) => {
     const answered = it.offers.filter((o) => o.status === "answered");
+    const capLines = (it.caps ?? []).map((c) => `🔁 ${c} — можно запускать сразу`);
+    if (answered.length === 0 && capLines.length) return `${it.geo_code}:\n  ${capLines.join("\n  ")}`;
     if (answered.length === 0) {
       if (it.status === "closed" && it.outcome) return `${it.geo_code} — ${ICON[it.outcome]} ${it.outcome_note ?? ""}`.trim();
       if (it.status === "archived") return `${it.geo_code} — ❌ рекл не ответил`;
@@ -71,7 +75,7 @@ export function managerText(r: TextRequest, items: TextItem[]) {
         .join(", ");
       return `${ICON[o.outcome ?? "partial"]} ${o.display_name}${o.outcome === "declined" ? " — отказ" : cond ? ` — ${cond}` : ""}`;
     });
-    return `${it.geo_code}:\n  ${parts.join("\n  ")}`;
+    return `${it.geo_code}:\n  ${[...capLines, ...parts].join("\n  ")}`;
   });
   return [head, "", ...rows].join("\n");
 }

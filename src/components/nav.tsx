@@ -3,12 +3,13 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import clsx from "clsx";
-import { Inbox, FileText, Package, Building2, Users, UserCheck, Globe2, Settings, Rocket, Table2 } from "lucide-react";
+import { Inbox, FileText, Package, Building2, Users, UserCheck, Globe2, Settings, Rocket, Table2, Repeat } from "lucide-react";
 
 const ITEMS: { href: string; label: string; icon: typeof Inbox; soon?: boolean }[] = [
   { href: "/", label: "Очередь", icon: Inbox },
   { href: "/requests", label: "Запросы", icon: FileText },
   { href: "/streams", label: "Потоки", icon: Rocket, soon: true },
+  { href: "/caps", label: "Свободные капы", icon: Repeat },
   { href: "/offers", label: "Офферы", icon: Package },
   { href: "/advertisers", label: "Рекламодатели", icon: Building2 },
   { href: "/managers", label: "Менеджеры", icon: Users },

@@ -2,19 +2,32 @@
 
 import { startTransition, useActionState, useMemo, useState } from "react";
 import { importStreams, type ImportState } from "@/lib/launch-actions";
+import { importCaps } from "@/lib/caps-actions";
 import { parseStreams } from "@/lib/parse-streams";
 import { LAUNCH_STAGE } from "@/lib/request-meta";
 import { btnCls, inputCls } from "@/components/ui";
 
 type Opt = { value: string; label: string };
 
-export function StreamImport({ advertisers, geoCodes, offerNames }: { advertisers: Opt[]; geoCodes: string[]; offerNames: string[] }) {
+/** Загрузка списком из гугл-таблицы. mode="caps" — свободные капы (без статусов потока). */
+export function StreamImport({
+  advertisers,
+  geoCodes,
+  offerNames,
+  mode = "streams",
+}: {
+  advertisers: Opt[];
+  geoCodes: string[];
+  offerNames: string[];
+  mode?: "streams" | "caps";
+}) {
+  const caps = mode === "caps";
   const [text, setText] = useState("");
   const [stage, setStage] = useState("live");
   // рекл для каждого нового продукта: id или "new:Название"
   const [productAdv, setProductAdv] = useState<Record<string, string>>({});
   const [newName, setNewName] = useState<Record<string, string>>({});
-  const [state, dispatch, pending] = useActionState<ImportState, FormData>(importStreams, {});
+  const [state, dispatch, pending] = useActionState<ImportState, FormData>(caps ? importCaps : importStreams, {});
   const parsed = useMemo(() => (text.trim() ? parseStreams(text, stage) : null), [text, stage]);
   const geos = useMemo(() => new Set(geoCodes.map((g) => (g === "GB" ? "UK" : g))), [geoCodes]);
   const offers = useMemo(() => new Set(offerNames.map((n) => n.toUpperCase())), [offerNames]);
@@ -49,7 +62,7 @@ export function StreamImport({ advertisers, geoCodes, offerNames }: { advertiser
   return (
     <div className="space-y-4">
       <ol className="list-decimal space-y-1 pl-5 text-sm text-slate-600">
-        <li>В гугл-таблице выдели строки потоков <b>вместе со строкой заголовков</b> и скопируй (Ctrl+C).</li>
+        <li>В гугл-таблице выдели строки {caps ? "со свободными капами" : "потоков"} <b>вместе со строкой заголовков</b> и скопируй (Ctrl+C).</li>
         <li>Вставь сюда (Ctrl+V) — или загрузи CSV-файл (Файл → Скачать → CSV).</li>
         <li>Проверь предпросмотр и нажми «Загрузить».</li>
       </ol>
@@ -60,7 +73,7 @@ export function StreamImport({ advertisers, geoCodes, offerNames }: { advertiser
           <span className="mb-1 block text-xs font-medium text-slate-500">или CSV-файл</span>
           <input type="file" accept=".csv,.tsv,.txt" onChange={(e) => onFile(e.target.files?.[0])} className="text-sm" />
         </label>
-        <label className="block">
+        {!caps && <label className="block">
           <span className="mb-1 block text-xs font-medium text-slate-500">Статус, если в строке не указан</span>
           <select value={stage} onChange={(e) => setStage(e.target.value)} className={inputCls}>
             {["live", "integrated", "waiting_link", "at_integrator"].map((s) => (
@@ -69,10 +82,13 @@ export function StreamImport({ advertisers, geoCodes, offerNames }: { advertiser
               </option>
             ))}
           </select>
-        </label>
-
+        </label>}
       </div>
-      <p className="text-xs text-slate-500">Строки со «СТОП» в любой ячейке загрузятся со статусом «Стоп». Уже загруженные потоки (тот же ID и гео) пропускаются — можно грузить повторно.</p>
+      <p className="text-xs text-slate-500">
+        {caps
+          ? "Отдаём на подмену оригинальный ID у рекла. «Название потока» — веб, который отказался. Капы с тем же ID и гео, которые уже свободны, пропускаются — можно грузить повторно."
+          : "Строки со «СТОП» в любой ячейке загрузятся со статусом «Стоп». Уже загруженные потоки (тот же ID и гео) пропускаются — можно грузить повторно."}
+      </p>
 
       {parsed?.error && <p className="rounded-lg bg-rose-50 px-3 py-2 text-sm text-rose-700">{parsed.error}</p>}
 
@@ -143,7 +159,10 @@ export function StreamImport({ advertisers, geoCodes, offerNames }: { advertiser
             <table className="w-full text-xs">
               <thead className="sticky top-0 bg-slate-100 text-left text-slate-500">
                 <tr>
-                  {["Стр.", "Ориг. ID", "Подмена", "Продукт", "Гео", "Сорс", "Подход", "Ставка", "Кап", "КПИ", "Менеджер", "Веб", "Статус", "Заметки"].map((h) => (
+                  {(caps
+                    ? ["Стр.", "Ориг. ID", "Подмена", "Продукт", "Гео", "Сорс", "Подход", "Ставка", "Кап", "КПИ", "Менеджер", "Кто отказался", "Заметки"]
+                    : ["Стр.", "Ориг. ID", "Подмена", "Продукт", "Гео", "Сорс", "Подход", "Ставка", "Кап", "КПИ", "Менеджер", "Веб", "Статус", "Заметки"]
+                  ).map((h) => (
                     <th key={h} className="px-2 py-1.5 font-semibold">
                       {h}
                     </th>
@@ -152,7 +171,7 @@ export function StreamImport({ advertisers, geoCodes, offerNames }: { advertiser
               </thead>
               <tbody>
                 {rows.map((r) => (
-                  <tr key={r.line} className={`border-t border-slate-100 ${r.stage === "stopped" ? "bg-rose-50" : ""}`}>
+                  <tr key={r.line} className={`border-t border-slate-100 ${!caps && r.stage === "stopped" ? "bg-rose-50" : ""}`}>
                     <td className="px-2 py-1 text-slate-400">{r.line}</td>
                     <td className="px-2 py-1 font-mono">{r.adv_stream_id}</td>
                     <td className="px-2 py-1 font-mono text-amber-700">{r.sub_id}</td>
@@ -165,7 +184,7 @@ export function StreamImport({ advertisers, geoCodes, offerNames }: { advertiser
                     <td className="px-2 py-1">{r.kpi == null ? "" : r.kpi ? "есть" : "нет"}</td>
                     <td className="px-2 py-1">{r.manager}</td>
                     <td className="max-w-40 truncate px-2 py-1">{r.webmaster}</td>
-                    <td className="px-2 py-1">{LAUNCH_STAGE[r.stage]?.label}</td>
+                    {!caps && <td className="px-2 py-1">{LAUNCH_STAGE[r.stage]?.label}</td>}
                     <td className="max-w-60 truncate px-2 py-1 text-slate-500">{r.notes}</td>
                   </tr>
                 ))}
