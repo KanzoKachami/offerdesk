@@ -14,8 +14,8 @@ begin;
 -- ---------------------------------------------------------------------
 -- 0. Чистим всё старое
 -- ---------------------------------------------------------------------
-drop view if exists v_launches cascade;
-drop table if exists launches, item_managers, activities, item_offers, request_items, request_assignees, requests,
+drop view if exists v_launches, v_free_caps cascade;
+drop table if exists free_caps, sheets, launches, item_managers, activities, item_offers, request_items, request_assignees, requests,
   offer_variants, offers, brands, webmasters, advertisers, assignees, managers, settings,
   source_tag_sources, source_tags, approaches, sources, geos cascade;
 drop view if exists v_offers, v_requests, v_queue cascade;
@@ -25,7 +25,7 @@ drop function if exists find_duplicates(uuid, text, uuid, int) cascade;
 drop function if exists set_updated_at, normalize_brand, build_offer_name, rename_brand_offers,
   on_item_status, sync_item_status, sort_tags, normalize_variant, normalize_offer,
   on_launch_stage, create_launch_on_approve, create_launch_on_item_close, create_launch_on_manager_approve,
-  create_launch_for_item cascade;
+  create_launch_for_item, on_free_cap_status cascade;
 drop type if exists advertiser_tier, webmaster_kind, request_type, request_mode, request_origin,
   priority_level, payout_model, offer_status, item_status, outcome_kind, item_offer_status,
   launch_stage cascade;
