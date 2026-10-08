@@ -1,11 +1,12 @@
 import { createServerClient } from "@supabase/ssr";
+import { SUPABASE_KEY, SUPABASE_URL } from "@/lib/supabase/env";
 import { cookies } from "next/headers";
 
 export async function createClient() {
   const cookieStore = await cookies();
   return createServerClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+    SUPABASE_URL,
+    SUPABASE_KEY,
     {
       // Данные из базы всегда свежие: Next.js не должен кэшировать ответы Supabase
       global: { fetch: (input, init) => fetch(input, { ...init, cache: "no-store" }) },
