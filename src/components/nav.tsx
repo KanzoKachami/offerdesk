@@ -8,7 +8,7 @@ import { Inbox, FileText, Package, Building2, Users, UserCheck, Globe2, Settings
 const ITEMS: { href: string; label: string; icon: typeof Inbox; soon?: boolean }[] = [
   { href: "/", label: "Очередь", icon: Inbox },
   { href: "/requests", label: "Запросы", icon: FileText },
-  { href: "/streams", label: "Потоки", icon: Rocket, soon: true },
+  { href: "/streams", label: "Потоки", icon: Rocket },
   { href: "/caps", label: "Свободные капы", icon: Repeat },
   { href: "/offers", label: "Офферы", icon: Package },
   { href: "/advertisers", label: "Рекламодатели", icon: Building2 },

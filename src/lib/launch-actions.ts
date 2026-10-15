@@ -180,7 +180,7 @@ export async function importStreams(_prev: ImportState, fd: FormData): Promise<I
     sb.from("geos").select("code"),
     sb.from("offers").select("id, name, geos"),
     sb.from("managers").select("id, name"),
-    sb.from("launches").select("adv_stream_id, sub_id, geo_code"),
+    sb.from("launches").select("id, adv_stream_id, sub_id, geo_code, offer_id, webmaster, stage, cap, rate, currency, kpi, manager_id, notes, source_code, approach_code"),
     sb.from("advertisers").select("id, name"),
   ]);
   const advByName = new Map((advs ?? []).map((a) => [String(a.name).toLowerCase(), a.id as string]));
@@ -200,8 +200,15 @@ export async function importStreams(_prev: ImportState, fd: FormData): Promise<I
   const geoSet = new Set((geos ?? []).map((g) => g.code as string));
   const offerByName = new Map((offers ?? []).map((o) => [String(o.name).toUpperCase(), { id: o.id as string, geos: (o.geos as string[]) ?? [] }]));
   const managerByName = new Map((managers ?? []).map((m) => [String(m.name).toLowerCase(), m.id as string]));
-  const key = (a: string | null, s: string | null, g: string) => `${a ?? ""}|${s ?? ""}|${g}`;
-  const seen = new Set((existing ?? []).filter((e) => e.adv_stream_id).map((e) => key(e.adv_stream_id as string, e.sub_id as string | null, e.geo_code as string)));
+  // Как узнать «ту же строку» при ежедневной загрузке: по ID у рекла + подмене + гео,
+  // а если ID нет — по продукту + гео + вебу.
+  type Ex = { id: string; adv_stream_id: string | null; sub_id: string | null; geo_code: string; offer_id: string | null; webmaster: string | null; stage: string; cap: number | null; rate: number | null; currency: string; kpi: boolean | null; manager_id: string | null; notes: string | null; source_code: string | null; approach_code: string | null };
+  const key = (adv: string | null, sub: string | null, geo: string, offerId: string | null, web: string | null) =>
+    adv ? `id|${adv}|${sub ?? ""}|${geo}` : `w|${offerId ?? ""}|${geo}|${(web ?? "").toLowerCase()}`;
+  const byKey = new Map<string, Ex | null>();
+  for (const e of (existing ?? []) as Ex[]) byKey.set(key(e.adv_stream_id, e.sub_id, e.geo_code, e.offer_id, e.webmaster), e);
+  const seenIds: string[] = [];
+  let updated = 0;
 
   const problems: string[] = [];
   const toInsert: Record<string, unknown>[] = [];
@@ -220,11 +227,6 @@ export async function importStreams(_prev: ImportState, fd: FormData): Promise<I
       problems.push(`Строка ${r.line}: гео «${r.geo}» нет в справочнике (Настройки → Гео)`);
       continue;
     }
-    if (r.adv_stream_id && seen.has(key(r.adv_stream_id, r.sub_id, geo))) {
-      skipped++;
-      continue;
-    }
-
     // продукт
     let offer = offerByName.get(product);
     if (!offer) {
@@ -268,11 +270,53 @@ export async function importStreams(_prev: ImportState, fd: FormData): Promise<I
     }
 
     const stage = STAGES.includes(r.stage) ? r.stage : "live";
+    const sub = r.sub_id && r.sub_id !== r.adv_stream_id ? r.sub_id : null;
+    const k = key(r.adv_stream_id, sub, geo, offer.id, r.webmaster);
+    if (byKey.has(k)) {
+      const ex = byKey.get(k);
+      if (!ex) {
+        skipped++; // повтор строки в этом же файле
+        continue;
+      }
+      // Уже есть: обновляем только то, что поменялось в таблице
+      const next: Record<string, unknown> = {
+        offer_id: offer.id,
+        source_code: r.source ? r.source.toUpperCase() : null,
+        approach_code: r.approach ? r.approach.toUpperCase() : null,
+        rate: r.rate,
+        currency: r.currency,
+        cap: r.cap,
+        kpi: r.kpi,
+        manager_id: managerId,
+        webmaster: r.webmaster,
+        notes: r.notes,
+      };
+      const patch: Record<string, unknown> = {};
+      for (const [f, v] of Object.entries(next)) {
+        const old = (ex as unknown as Record<string, unknown>)[f];
+        const same = f === "rate" ? (old == null ? null : Number(old)) === (v == null ? null : Number(v)) : (old ?? null) === (v ?? null);
+        if (!same) patch[f] = v;
+      }
+      // Статус из таблицы: «СТОП» останавливает, а если «СТОП» убрали — снова «Льёт». Остальные статусы — твои.
+      if (stage === "stopped" && ex.stage !== "stopped") patch.stage = "stopped";
+      if (stage !== "stopped" && ex.stage === "stopped") patch.stage = "live";
+      if (Object.keys(patch).length) {
+        const { error } = await sb.from("launches").update({ ...patch, seen_at: new Date().toISOString() }).eq("id", ex.id);
+        if (error) problems.push(`Строка ${r.line}: не удалось обновить — ${error.message}`);
+        else updated++;
+      } else {
+        seenIds.push(ex.id);
+        skipped++;
+      }
+      byKey.set(k, null);
+      continue;
+    }
+    byKey.set(k, null);
     toInsert.push({
       offer_id: offer.id,
       geo_code: geo,
       adv_stream_id: r.adv_stream_id,
-      sub_id: r.sub_id && r.sub_id !== r.adv_stream_id ? r.sub_id : null,
+      sub_id: sub,
       source_code: r.source ? r.source.toUpperCase() : null,
       approach_code: r.approach ? r.approach.toUpperCase() : null,
       rate: r.rate,
@@ -284,9 +328,10 @@ export async function importStreams(_prev: ImportState, fd: FormData): Promise<I
       stage,
       notes: r.notes,
       issued_at: ["integrated", "live", "no_traffic", "stopped"].includes(stage) ? new Date().toISOString() : null,
+      seen_at: new Date().toISOString(),
     });
-    if (r.adv_stream_id) seen.add(key(r.adv_stream_id, r.sub_id, geo));
   }
+  if (seenIds.length) await sb.from("launches").update({ seen_at: new Date().toISOString() }).in("id", seenIds);
 
   if (toInsert.length) {
     const { error } = await sb.from("launches").insert(toInsert);
@@ -297,8 +342,9 @@ export async function importStreams(_prev: ImportState, fd: FormData): Promise<I
   revalidatePath("/offers");
   revalidatePath("/managers");
   const summary = [
-    `Загружено потоков: ${toInsert.length}`,
-    skipped ? `уже были: ${skipped}` : "",
+    `Новых потоков: ${toInsert.length}`,
+    `обновлено: ${updated}`,
+    `без изменений: ${skipped}`,
     newProducts ? `новых продуктов: ${newProducts}` : "",
     newAdvertisers ? `новых реклов: ${newAdvertisers}` : "",
     newManagers ? `новых менеджеров: ${newManagers}` : "",
