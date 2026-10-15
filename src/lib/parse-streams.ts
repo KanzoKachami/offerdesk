@@ -57,6 +57,18 @@ const GEO_ALIAS: Record<string, string> = { GB: "UK", CIV: "CI" };
 
 const isMoney = (v: string) => /^[€$]?\s*\d+(?:[.,]\d+)?\s*[€$]?$/.test(v.trim());
 const isDate = (v: string) => /^\d{1,2}[./]\d{1,2}(?:[./]\d{2,4})?$/.test(v.trim());
+/** «02/09», «04.09», «21.01.2026» → «2026-09-02». Без года: этот год, а если дата в будущем — прошлый. */
+export function parseSheetDate(v: string, today = new Date()): string | null {
+  const m = v.trim().match(/^(\d{1,2})[./](\d{1,2})(?:[./](\d{2,4}))?$/);
+  if (!m) return null;
+  const d = Number(m[1]);
+  const mo = Number(m[2]);
+  if (d < 1 || d > 31 || mo < 1 || mo > 12) return null;
+  let y = m[3] ? Number(m[3].length === 2 ? `20${m[3]}` : m[3]) : today.getFullYear();
+  const make = (yy: number) => new Date(Date.UTC(yy, mo - 1, d));
+  if (!m[3] && make(y).getTime() > today.getTime() + 86400000) y -= 1;
+  return make(y).toISOString().slice(0, 10);
+}
 /** «CRUSADO (DE) [PPC» → «CRUSADO» */
 const cleanProduct = (v: string) => v.split(/[([]/)[0].replace(/\s+/g, " ").trim().toUpperCase();
 const firstNum = (v: string) => {
@@ -84,6 +96,7 @@ export function parseStreams(text: string, defaultStage: string): ParsedImport {
     source: findCol(head, (h) => h.includes("источник") || h.includes("сорс"), used),
     rate: findCol(head, (h) => h.includes("ставка"), used),
     manager: findCol(head, (h) => h.includes("менеджер"), used),
+    ftd: findCol(head, (h) => h.includes("отлит") || h === "депы" || h.includes("ftd"), used),
     kpi: findCol(head, (h) => h.includes("кпи") || h.includes("kpi"), used),
     date: findCol(head, (h) => h.includes("дата"), used),
     web: findCol(head, (h) => h.includes("веб"), used),
@@ -110,8 +123,9 @@ export function parseStreams(text: string, defaultStage: string): ParsedImport {
     source: "Сорс",
     rate: "Ставка",
     manager: "Менеджер",
+    ftd: "Отлито (депы за месяц)",
     kpi: "КПИ",
-    date: "Дата (текст → заметки)",
+    date: "Дата выдачи",
     web: "Веб",
     status: "Статус",
   };
@@ -180,6 +194,10 @@ export function parseStreams(text: string, defaultStage: string): ParsedImport {
     if (kpiRaw && kpi == null && !isDate(kpiRaw)) notes.push(kpiRaw);
     const dateRaw = get(c.date);
     if (dateRaw && !isDate(dateRaw)) notes.push(dateRaw);
+    // дата выдачи: из своей колонки, а если там пусто — из «КПИ», где у вас часто стоит дата
+    const issued_on = (isDate(dateRaw) ? parseSheetDate(dateRaw) : null) ?? (isDate(kpiRaw) ? parseSheetDate(kpiRaw) : null);
+    const ftdRaw = get(c.ftd);
+    const ftd = /^\d+$/.test(ftdRaw) ? Number(ftdRaw) : null;
 
     const st = low(get(c.status));
     const cells = r.map((x) => x.trim());
@@ -195,7 +213,7 @@ export function parseStreams(text: string, defaultStage: string): ParsedImport {
               : st.includes("выдан")
                 ? "integrated"
                 : "live"
-      : cells.some((x) => /^стоп/i.test(x) || /^неактуальн/i.test(x))
+      : cells.some((x) => /^стоп/i.test(x)) // «СТОП» — рекл остановил. «Неактуально» — это про веба, статус не трогаем
         ? "stopped"
         : defaultStage;
 
@@ -215,6 +233,8 @@ export function parseStreams(text: string, defaultStage: string): ParsedImport {
       currency: rateRaw.includes("€") || /eur/i.test(rateRaw) ? "EUR" : "USD",
       cap: capStream ?? capMonth,
       kpi,
+      ftd,
+      issued_on,
       manager: manager && manager !== "-" ? manager : null,
       webmaster: get(c.web) || nameParts[0]?.replace(/\s+/g, " ").split(" ")[0] || null,
       stage,

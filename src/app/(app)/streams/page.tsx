@@ -1,15 +1,14 @@
 import Link from "next/link";
 import { createClient } from "@/lib/supabase/server";
-import { LAUNCH_STAGE } from "@/lib/request-meta";
-import { deleteStream } from "@/lib/launch-actions";
+import { deleteStream, moveStreamToCaps } from "@/lib/launch-actions";
 import { StreamForm, type StreamFormRow } from "@/components/stream-form";
 import { StageSelect } from "@/components/stream-controls";
 import { ConfirmSubmit } from "@/components/confirm-submit";
+import { CopyBox } from "@/components/copy-box";
 import { Card, Empty, Flash, PageHeader, btnCls, inputCls } from "@/components/ui";
 
 // Потоки — список из гугл-таблицы, который загружается каждый день. Ни к чему не привязан.
-const STALE_WARN = 7; // дней без изменений — подсвечиваем
-const STALE_BAD = 14;
+const NO_FTD_DAYS = 7; // дней без новых депов — поток «не льёт», подсвечиваем красным
 
 type S = StreamFormRow & {
   id: string;
@@ -19,9 +18,39 @@ type S = StreamFormRow & {
   manager_name: string | null;
   webmaster_name: string | null;
   days_unchanged: number;
+  days_no_ftd: number;
+  days_issued: number;
+  ftd: number | null;
+  issued_on: string | null;
+  free_cap_id: string | null;
   is_new: boolean;
   changed_at: string;
 };
+
+const isStopped = (s: { stage: string }) => ["stopped", "no_traffic"].includes(s.stage);
+const notPouring = (s: S) => !isStopped(s) && !s.free_cap_id && s.days_no_ftd >= NO_FTD_DAYS;
+
+/** Пуш менеджерам: по каждому — его потоки, которые не льют. */
+function pushTexts(list: S[]) {
+  const byManager = new Map<string, S[]>();
+  for (const s of list) byManager.set(s.manager_name ?? "Без менеджера", [...(byManager.get(s.manager_name ?? "Без менеджера") ?? []), s]);
+  return [...byManager.entries()]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([manager, rows]) => ({
+      manager,
+      count: rows.length,
+      text: [
+        `${manager === "Без менеджера" ? "Ребят" : manager}, по ${rows.length === 1 ? "этому потоку" : "этим потокам"} тишина ${NO_FTD_DAYS}+ дней:`,
+        ...rows.map(
+          (s) =>
+            `• ${s.offer_name ?? ""} ${s.geo_code}${s.source_code ? ` [${s.source_code}]` : ""} — ID ${s.sub_id ?? s.adv_stream_id ?? "—"}${s.webmaster_name ? `, ${s.webmaster_name}` : ""} — ${
+              (s.ftd ?? 0) > 0 ? `последний деп ${s.days_no_ftd} дн назад` : `0 депов${s.issued_on ? ` с ${new Date(s.issued_on).toLocaleDateString("ru-RU", { day: "2-digit", month: "2-digit" })}` : ""}`
+            }`
+        ),
+        "Что по ним? Если лить не будут — заберём капу и отдадим другим.",
+      ].join("\n"),
+    }));
+}
 
 const STATUS_FILTERS: Record<string, { label: string; stages: string[] | null }> = {
   active: { label: "Кроме стопа", stages: ["waiting_link", "link_received", "at_integrator", "integrated", "live", "ftd"] },
@@ -57,7 +86,7 @@ export default async function StreamsPage({ searchParams }: { searchParams: Prom
         (!status.stages || status.stages.includes(s.stage)) &&
         (!sp.geo || s.geo_code === sp.geo) &&
         (!sp.manager || s.manager_id === sp.manager) &&
-        (!staleOnly || (s.days_unchanged >= STALE_WARN && !["stopped", "no_traffic"].includes(s.stage))) &&
+        (!staleOnly || notPouring(s)) &&
         (!newOnly || s.is_new) &&
         (!q ||
           [s.offer_name, s.advertiser_name, s.adv_stream_id, s.sub_id, s.geo_code, s.webmaster_name, s.manager_name, s.source_code, s.approach_code, s.notes]
@@ -65,10 +94,17 @@ export default async function StreamsPage({ searchParams }: { searchParams: Prom
             .some((v) => String(v).toLowerCase().includes(q)))
     )
     // сначала новые, потом самые «застоявшиеся»
-    .sort((a, b) => Number(b.is_new) - Number(a.is_new) || b.days_unchanged - a.days_unchanged || String(a.offer_name).localeCompare(String(b.offer_name)));
+    .sort(
+      (a, b) =>
+        Number(b.is_new) - Number(a.is_new) ||
+        Number(notPouring(b)) - Number(notPouring(a)) ||
+        b.days_no_ftd - a.days_no_ftd ||
+        String(a.offer_name).localeCompare(String(b.offer_name))
+    );
 
-  const activeAll = all.filter((s) => !["stopped", "no_traffic"].includes(s.stage));
-  const staleCount = activeAll.filter((s) => s.days_unchanged >= STALE_WARN).length;
+  const silent = all.filter(notPouring);
+  const staleCount = silent.length;
+  const movedCount = all.filter((s) => s.free_cap_id).length;
   const newCount = all.filter((s) => s.is_new).length;
   const editing = sp.edit ? all.find((s) => s.id === sp.edit) : undefined;
   const hasFilters = Boolean(q || sp.geo || sp.manager || staleOnly || newOnly || (sp.status && sp.status !== "active"));
@@ -76,9 +112,8 @@ export default async function StreamsPage({ searchParams }: { searchParams: Prom
 
   const rowBg = (s: S) => {
     if (s.is_new) return "bg-emerald-50/70";
-    if (["stopped", "no_traffic"].includes(s.stage)) return "bg-slate-50 text-slate-400";
-    if (s.days_unchanged >= STALE_BAD) return "bg-rose-50";
-    if (s.days_unchanged >= STALE_WARN) return "bg-amber-50/70";
+    if (isStopped(s) || s.free_cap_id) return "bg-slate-50 text-slate-400";
+    if (notPouring(s)) return "bg-rose-50";
     return "";
   };
 
@@ -86,7 +121,7 @@ export default async function StreamsPage({ searchParams }: { searchParams: Prom
     <>
       <PageHeader
         title="Потоки"
-        subtitle={`Всего: ${all.length} · новых за сутки: ${newCount} · без изменений ${STALE_WARN}+ дней: ${staleCount}`}
+        subtitle={`Всего: ${all.length} · новых за сутки: ${newCount} · не льют ${NO_FTD_DAYS}+ дней: ${staleCount}${movedCount ? ` · ушли в свободные капы: ${movedCount}` : ""}`}
         actions={
           <>
             <Link href="/streams/import" className={btnCls.secondary}>
@@ -141,7 +176,7 @@ export default async function StreamsPage({ searchParams }: { searchParams: Prom
         </select>
         <label className="flex items-center gap-1.5 text-sm text-slate-600">
           <input type="checkbox" name="stale" value="1" defaultChecked={staleOnly} className="h-4 w-4 accent-amber-500" />
-          без изменений {STALE_WARN}+ дн
+          не льют {NO_FTD_DAYS}+ дн
         </label>
         <label className="flex items-center gap-1.5 text-sm text-slate-600">
           <input type="checkbox" name="new_only" value="1" defaultChecked={newOnly} className="h-4 w-4 accent-emerald-600" />
@@ -154,6 +189,24 @@ export default async function StreamsPage({ searchParams }: { searchParams: Prom
           </Link>
         )}
       </form>
+
+      {silent.length > 0 && (
+        <details className="mb-4 rounded-xl border border-rose-200 bg-rose-50/50 p-4">
+          <summary className="cursor-pointer text-sm font-semibold text-rose-900">
+            Пуш менеджерам · не льют {NO_FTD_DAYS}+ дней: {silent.length}
+          </summary>
+          <div className="mt-3 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+            {pushTexts(silent).map((p) => (
+              <div key={p.manager}>
+                <div className="mb-1 text-xs font-semibold text-slate-700">
+                  {p.manager} · {p.count}
+                </div>
+                <CopyBox text={p.text} rows={Math.min(10, p.count + 3)} />
+              </div>
+            ))}
+          </div>
+        </details>
+      )}
 
       <Card className="!p-4">
         {list.length === 0 ? (
@@ -175,14 +228,16 @@ export default async function StreamsPage({ searchParams }: { searchParams: Prom
                   <th className="px-2 py-1.5">Менеджер</th>
                   <th className="px-2 py-1.5">Веб</th>
                   <th className="px-2 py-1.5">Статус</th>
-                  <th className="px-2 py-1.5">Без изменений</th>
+                  <th className="px-2 py-1.5">Депы (мес)</th>
+                  <th className="px-2 py-1.5">Не льёт</th>
                   <th className="px-2 py-1.5">Заметки</th>
                   <th className="px-2 py-1.5"></th>
                 </tr>
               </thead>
               <tbody>
                 {list.map((s) => {
-                  const stopped = ["stopped", "no_traffic"].includes(s.stage);
+                  const stopped = isStopped(s);
+                  const silentRow = notPouring(s);
                   return (
                     <tr key={s.id} id={`s-${s.id}`} className={`border-b border-slate-100 align-middle hover:bg-slate-50 ${rowBg(s)}`}>
                       <td className={`${td} font-mono`}>{s.adv_stream_id ?? "—"}</td>
@@ -204,25 +259,33 @@ export default async function StreamsPage({ searchParams }: { searchParams: Prom
                       <td className={td}>
                         <StageSelect key={s.stage} id={s.id} stage={s.stage} />
                       </td>
-                      <td className={td} title={`последнее изменение: ${new Date(s.changed_at).toLocaleDateString("ru-RU")}`}>
-                        <span
-                          className={
-                            stopped
-                              ? "text-slate-400"
-                              : s.days_unchanged >= STALE_BAD
-                                ? "font-semibold text-rose-600"
-                                : s.days_unchanged >= STALE_WARN
-                                  ? "font-semibold text-amber-700"
-                                  : "text-slate-500"
-                          }
-                        >
-                          {s.days_unchanged} дн
-                        </span>
+                      <td className={`${td} font-semibold`}>{s.ftd ?? ""}</td>
+                      <td
+                        className={td}
+                        title={`выдан: ${s.issued_on ? new Date(s.issued_on).toLocaleDateString("ru-RU") : "дата неизвестна"} · последнее изменение строки: ${new Date(s.changed_at).toLocaleDateString("ru-RU")}`}
+                      >
+                        {s.free_cap_id ? (
+                          <Link href="/caps" className="text-[11px] font-semibold text-emerald-700 hover:underline">
+                            → в свободных капах
+                          </Link>
+                        ) : stopped ? (
+                          <span className="text-slate-400">—</span>
+                        ) : (
+                          <span className={silentRow ? "font-semibold text-rose-600" : "text-slate-500"}>{s.days_no_ftd} дн</span>
+                        )}
                       </td>
                       <td className={`${td} max-w-56 truncate text-slate-500`} title={s.notes ?? ""}>
                         {s.notes}
                       </td>
                       <td className="whitespace-nowrap px-1 py-1 text-right">
+                        {!s.free_cap_id && !s.sub_id && s.adv_stream_id && (
+                          <form action={moveStreamToCaps} className="inline">
+                            <input type="hidden" name="id" value={s.id} />
+                            <ConfirmSubmit message="Веб не будет лить — отдать капу в «Свободные капы»?" className={btnCls.ghost}>
+                              → Капы
+                            </ConfirmSubmit>
+                          </form>
+                        )}
                         <Link href={`/streams?edit=${s.id}`} className={btnCls.ghost}>
                           Изм.
                         </Link>
@@ -241,8 +304,9 @@ export default async function StreamsPage({ searchParams }: { searchParams: Prom
           </div>
         )}
         <p className="mt-3 text-[11px] text-slate-400">
-          Зелёным — новые за сутки. Жёлтым — без изменений {STALE_WARN}+ дней, красным — {STALE_BAD}+. Изменение = что-то поменялось при загрузке (кап, ставка, веб,
-          менеджер, заметка, «СТОП») или ты поправил вручную. Статусы: {LAUNCH_STAGE.live.label}, {LAUNCH_STAGE.stopped.label} и т.д. меняются прямо в строке.
+          Зелёным — новые за сутки. Красным — не льёт {NO_FTD_DAYS}+ дней: «Отлито» не растёт, а если депов не было — прошло {NO_FTD_DAYS}+ дней с выдачи. Серым — стоп
+          или капа ушла в свободные. При загрузке потоки с «неактуально» в комментариях сами уходят в свободные капы: оригинал выдан 7+ дней назад, подмен нет или на
+          них нет депов и они выданы 5+ дней назад. «→ Капы» — отдать капу вручную.
         </p>
       </Card>
     </>

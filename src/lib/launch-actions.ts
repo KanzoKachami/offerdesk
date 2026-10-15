@@ -151,6 +151,8 @@ export type ImportRow = {
   currency: "USD" | "EUR";
   cap: number | null;
   kpi: boolean | null;
+  ftd?: number | null; // «Отлито» — депы за текущий месяц
+  issued_on?: string | null; // дата выдачи потока, YYYY-MM-DD
   manager: string | null;
   webmaster: string | null;
   stage: string;
@@ -180,7 +182,7 @@ export async function importStreams(_prev: ImportState, fd: FormData): Promise<I
     sb.from("geos").select("code"),
     sb.from("offers").select("id, name, geos"),
     sb.from("managers").select("id, name"),
-    sb.from("launches").select("id, adv_stream_id, sub_id, geo_code, offer_id, webmaster, stage, cap, rate, currency, kpi, manager_id, notes, source_code, approach_code"),
+    sb.from("launches").select("id, adv_stream_id, sub_id, geo_code, offer_id, webmaster, stage, cap, rate, currency, kpi, manager_id, notes, source_code, approach_code, ftd, issued_on"),
     sb.from("advertisers").select("id, name"),
   ]);
   const advByName = new Map((advs ?? []).map((a) => [String(a.name).toLowerCase(), a.id as string]));
@@ -202,7 +204,7 @@ export async function importStreams(_prev: ImportState, fd: FormData): Promise<I
   const managerByName = new Map((managers ?? []).map((m) => [String(m.name).toLowerCase(), m.id as string]));
   // Как узнать «ту же строку» при ежедневной загрузке: по ID у рекла + подмене + гео,
   // а если ID нет — по продукту + гео + вебу.
-  type Ex = { id: string; adv_stream_id: string | null; sub_id: string | null; geo_code: string; offer_id: string | null; webmaster: string | null; stage: string; cap: number | null; rate: number | null; currency: string; kpi: boolean | null; manager_id: string | null; notes: string | null; source_code: string | null; approach_code: string | null };
+  type Ex = { id: string; adv_stream_id: string | null; sub_id: string | null; geo_code: string; offer_id: string | null; webmaster: string | null; stage: string; cap: number | null; rate: number | null; currency: string; kpi: boolean | null; manager_id: string | null; notes: string | null; source_code: string | null; approach_code: string | null; ftd: number | null; issued_on: string | null };
   const key = (adv: string | null, sub: string | null, geo: string, offerId: string | null, web: string | null) =>
     adv ? `id|${adv}|${sub ?? ""}|${geo}` : `w|${offerId ?? ""}|${geo}|${(web ?? "").toLowerCase()}`;
   const byKey = new Map<string, Ex | null>();
@@ -290,6 +292,8 @@ export async function importStreams(_prev: ImportState, fd: FormData): Promise<I
         manager_id: managerId,
         webmaster: r.webmaster,
         notes: r.notes,
+        ftd: r.ftd ?? null,
+        issued_on: r.issued_on ?? null,
       };
       const patch: Record<string, unknown> = {};
       for (const [f, v] of Object.entries(next)) {
@@ -327,6 +331,8 @@ export async function importStreams(_prev: ImportState, fd: FormData): Promise<I
       webmaster: r.webmaster,
       stage,
       notes: r.notes,
+      ftd: r.ftd ?? null,
+      issued_on: r.issued_on ?? null,
       issued_at: ["integrated", "live", "no_traffic", "stopped"].includes(stage) ? new Date().toISOString() : null,
       seen_at: new Date().toISOString(),
     });
@@ -337,14 +343,18 @@ export async function importStreams(_prev: ImportState, fd: FormData): Promise<I
     const { error } = await sb.from("launches").insert(toInsert);
     if (error) return { error: `Ошибка загрузки: ${error.message}`, problems };
   }
+  // после загрузки: неактуальные потоки → свободные капы
+  const movedToCaps = await autoFreeCaps(sb);
 
   revalidatePath("/streams");
+  revalidatePath("/caps");
   revalidatePath("/offers");
   revalidatePath("/managers");
   const summary = [
     `Новых потоков: ${toInsert.length}`,
     `обновлено: ${updated}`,
     `без изменений: ${skipped}`,
+    movedToCaps ? `в свободные капы ушло: ${movedToCaps}` : "",
     newProducts ? `новых продуктов: ${newProducts}` : "",
     newAdvertisers ? `новых реклов: ${newAdvertisers}` : "",
     newManagers ? `новых менеджеров: ${newManagers}` : "",
@@ -353,4 +363,114 @@ export async function importStreams(_prev: ImportState, fd: FormData): Promise<I
     .join(", ");
   if (problems.length) return { error: `${summary}. Не загружено строк: ${problems.length}`, problems };
   redirect(`/streams?ok=${encodeURIComponent(summary)}&t=${Date.now()}`);
+}
+
+// ---------------------------------------------------------------------
+// Неактуальные потоки → свободные капы
+// ---------------------------------------------------------------------
+
+/** «Неактуально» в комментариях — веб не льёт. «СТОП» сюда не входит: это рекл остановил. */
+const NOT_ACTUAL = /не\s*актуальн|веб\s+отказ|отказал|отказ\b|не\s+будет\s+лить|игнор/i;
+const ORIGINAL_MIN_DAYS = 7; // оригинал выдан больше 7 дней назад
+const SUB_MIN_DAYS = 5; // подмена без депов выдана больше 5 дней назад
+
+type Sb = Awaited<ReturnType<typeof createClient>>;
+type L = {
+  id: string;
+  adv_stream_id: string | null;
+  sub_id: string | null;
+  geo_code: string;
+  offer_id: string | null;
+  notes: string | null;
+  stage: string;
+  ftd: number | null;
+  issued_on: string | null;
+  created_at: string;
+  free_cap_id: string | null;
+  source_code: string | null;
+  approach_code: string | null;
+  cap: number | null;
+  rate: number | null;
+  currency: string;
+  webmaster: string | null;
+  manager_id: string | null;
+};
+
+const daysSince = (l: L) => Math.floor((Date.now() - new Date(l.issued_on ?? l.created_at).getTime()) / 86400000);
+
+/** Правила:
+ *  - в комментариях «неактуально» (и похожее), поток выдан больше 7 дней назад;
+ *  - сама строка не подмена;
+ *  - если под этим ID есть подмены: ни на одной нет депов и все выданы больше 5 дней назад.
+ *  Возвращает, сколько потоков ушло в свободные капы. */
+async function autoFreeCaps(sb: Sb): Promise<number> {
+  const [{ data }, { data: caps }] = await Promise.all([
+    sb.from("launches").select("id, adv_stream_id, sub_id, geo_code, offer_id, notes, stage, ftd, issued_on, created_at, free_cap_id, source_code, approach_code, cap, rate, currency, webmaster, manager_id"),
+    sb.from("free_caps").select("id, adv_stream_id, geo_code"),
+  ]);
+  const all = (data ?? []) as L[];
+  const capByKey = new Map((caps ?? []).filter((c) => c.adv_stream_id).map((c) => [`${c.adv_stream_id}|${c.geo_code}`, c.id as string]));
+  const subsOf = (l: L) => all.filter((x) => x.sub_id && x.adv_stream_id === l.adv_stream_id && x.geo_code === l.geo_code);
+  let moved = 0;
+  for (const l of all) {
+    if (l.free_cap_id || l.sub_id || !l.adv_stream_id || !l.offer_id) continue;
+    if (!l.notes || !NOT_ACTUAL.test(l.notes)) continue;
+    if (daysSince(l) <= ORIGINAL_MIN_DAYS) continue;
+    const subs = subsOf(l);
+    if (subs.some((x) => (x.ftd ?? 0) > 0)) continue; // подмена льёт — капа занята
+    if (subs.some((x) => daysSince(x) <= SUB_MIN_DAYS)) continue; // подмену выдали недавно — ждём
+    moved += (await streamToCap(sb, l, capByKey, "авто: неактуально")) ? 1 : 0;
+  }
+  return moved;
+}
+
+/** Создать свободную капу из потока (или привязать к уже существующей по тому же ID и гео). */
+async function streamToCap(sb: Sb, l: L, capByKey: Map<string, string>, why: string): Promise<boolean> {
+  const k = `${l.adv_stream_id}|${l.geo_code}`;
+  let capId = l.adv_stream_id ? capByKey.get(k) : undefined;
+  if (!capId) {
+    const { data, error } = await sb
+      .from("free_caps")
+      .insert({
+        offer_id: l.offer_id,
+        geo_code: l.geo_code,
+        source_code: l.source_code,
+        approach_code: l.approach_code,
+        adv_stream_id: l.adv_stream_id,
+        cap: l.cap,
+        rate: l.rate,
+        currency: l.currency === "EUR" ? "EUR" : "USD",
+        released_by: l.webmaster,
+        released_manager_id: l.manager_id,
+        launch_id: l.id,
+        notes: `из потоков (${why})${l.notes ? `: ${l.notes}` : ""}`.slice(0, 500),
+      })
+      .select("id")
+      .single();
+    if (error || !data) return false;
+    capId = data.id as string;
+    capByKey.set(k, capId);
+  }
+  await sb.from("launches").update({ free_cap_id: capId }).eq("id", l.id);
+  return true;
+}
+
+/** Кнопка в строке потока: менеджер сказал «лить не будут» — капа свободна. */
+export async function moveStreamToCaps(fd: FormData) {
+  const id = String(fd.get("id"));
+  const sb = await createClient();
+  const { data: l } = await sb
+    .from("launches")
+    .select("id, adv_stream_id, sub_id, geo_code, offer_id, notes, stage, ftd, issued_on, created_at, free_cap_id, source_code, approach_code, cap, rate, currency, webmaster, manager_id")
+    .eq("id", id)
+    .single();
+  if (!l) fail("Поток не найден");
+  if (!(l as L).offer_id) fail("У потока не указан продукт — сначала поправь его");
+  const { data: caps } = await sb.from("free_caps").select("id, adv_stream_id, geo_code");
+  const capByKey = new Map((caps ?? []).filter((c) => c.adv_stream_id).map((c) => [`${c.adv_stream_id}|${c.geo_code}`, c.id as string]));
+  const ok = await streamToCap(sb, l as L, capByKey, "вручную");
+  if (!ok) fail("Не удалось создать свободную капу");
+  revalidatePath("/streams");
+  revalidatePath("/caps");
+  redirect(`/streams?ok=${encodeURIComponent("Капа ушла в «Свободные капы»")}&t=${Date.now()}`);
 }
