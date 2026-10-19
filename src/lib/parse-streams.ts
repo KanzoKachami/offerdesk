@@ -98,6 +98,7 @@ export function parseStreams(text: string, defaultStage: string): ParsedImport {
     manager: findCol(head, (h) => h.includes("менеджер"), used),
     ftd: findCol(head, (h) => h.includes("отлит") || h === "депы" || h.includes("ftd"), used),
     kpi: findCol(head, (h) => h.includes("кпи") || h.includes("kpi"), used),
+    actual: findCol(head, (h) => h.includes("дата") && h.includes("актуал"), used),
     date: findCol(head, (h) => h.includes("дата"), used),
     web: findCol(head, (h) => h.includes("веб"), used),
     status: findCol(head, (h) => h.includes("статус"), used),
@@ -126,6 +127,7 @@ export function parseStreams(text: string, defaultStage: string): ParsedImport {
     ftd: "Отлито (депы за месяц)",
     kpi: "КПИ",
     date: "Дата выдачи",
+    actual: "Дата актуализации (стоп)",
     web: "Веб",
     status: "Статус",
   };
@@ -195,6 +197,9 @@ export function parseStreams(text: string, defaultStage: string): ParsedImport {
     const dateRaw = get(c.date);
     if (dateRaw && !isDate(dateRaw)) notes.push(dateRaw);
     // дата выдачи: из своей колонки, а если там пусто — из «КПИ», где у вас часто стоит дата
+    // дата актуализации: когда поток поставили на стоп (или последний раз меняли)
+    const actualRaw = get0(c.actual);
+    const actualized_on = isDate(actualRaw) ? parseSheetDate(actualRaw) : null;
     const issued_on = (isDate(dateRaw) ? parseSheetDate(dateRaw) : null) ?? (isDate(kpiRaw) ? parseSheetDate(kpiRaw) : null);
     const ftdRaw = get(c.ftd);
     const ftd = /^\d+$/.test(ftdRaw) ? Number(ftdRaw) : null;
@@ -236,6 +241,7 @@ export function parseStreams(text: string, defaultStage: string): ParsedImport {
       kpi,
       ftd,
       issued_on,
+      actualized_on,
       manager: manager && manager !== "-" ? manager : null,
       webmaster: get(c.web) || nameParts[0]?.replace(/\s+/g, " ").split(" ")[0] || null,
       stage,

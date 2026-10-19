@@ -8,8 +8,6 @@ import { LAUNCH_STAGE } from "@/lib/request-meta";
 import { btnCls, inputCls } from "@/components/ui";
 
 type Opt = { value: string; label: string };
-/** Последняя синхронизация из Chrome: вкладки таблицы, уже собранные в один список. */
-export type SheetInbox = { id: string; created_at: string; tabs: string[]; rows: number; body: string };
 
 /** Загрузка списком из гугл-таблицы. mode="caps" — свободные капы (без статусов потока). */
 export function StreamImport({
@@ -17,13 +15,11 @@ export function StreamImport({
   geoCodes,
   offerNames,
   mode = "streams",
-  inbox,
 }: {
   advertisers: Opt[];
   geoCodes: string[];
   offerNames: string[];
   mode?: "streams" | "caps";
-  inbox?: SheetInbox | null;
 }) {
   const caps = mode === "caps";
   const [text, setText] = useState("");
@@ -70,23 +66,6 @@ export function StreamImport({
         <li>Вставь сюда (Ctrl+V) — или загрузи CSV-файл (Файл → Скачать → CSV).</li>
         <li>Проверь предпросмотр и нажми «Загрузить».</li>
       </ol>
-
-      {inbox && !caps && (
-        <div className="flex flex-wrap items-center gap-3 rounded-lg border border-indigo-200 bg-indigo-50 px-3 py-2 text-sm text-indigo-900">
-          <span>
-            <b>Синхронизация из Chrome</b> ·{" "}
-            {new Date(inbox.created_at).toLocaleString("ru-RU", { timeZone: "Europe/Moscow", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })} · {inbox.rows} строк ·{" "}
-            {inbox.tabs.length} вкладок
-          </span>
-          <button type="button" onClick={() => setText(inbox.body)} className={btnCls.primary}>
-            Подставить
-          </button>
-          <span className="text-xs text-indigo-700/70" title={inbox.tabs.join(", ")}>
-            {inbox.tabs.slice(0, 6).join(", ")}
-            {inbox.tabs.length > 6 ? "…" : ""}
-          </span>
-        </div>
-      )}
 
       <textarea value={text} onChange={(e) => setText(e.target.value)} rows={8} placeholder="Вставь строки из таблицы…" className={`${inputCls} font-mono text-xs`} />
       <div className="flex flex-wrap items-end gap-3">

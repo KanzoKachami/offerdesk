@@ -1,11 +1,9 @@
 -- 010_streams_sync.sql — «Потоки» из таблицы: то, что уже было в базе, но не было в репозитории,
--- плюс капа на ID за месяц и синхронизация через Chrome. Данные не удаляет, можно запускать повторно.
+-- плюс капа на ID за месяц. Данные не удаляет, можно запускать повторно.
 --
 -- 1. Поля потоков, которые уже есть в рабочей базе (отлито, дата выдачи, подмена в свободные капы и т. д.).
 --    В рабочей базе они уже созданы — здесь «if not exists», чтобы новая база собиралась так же.
 -- 2. cap_month — «КАП <МЕСЯЦ> НА ID»: сколько FTD рекл дал на свой ID в этом месяце.
--- 3. Входящие синхронизации: Claude читает вкладки таблицы в Chrome и кладёт их сюда по токену,
---    на странице «Загрузить из таблицы» они подставляются кнопкой и грузятся как обычно.
 
 begin;
 
@@ -69,53 +67,6 @@ left join advertisers a on a.id = coalesce(o.advertiser_id, l.advertiser_ref)
 left join managers    m on m.id = l.manager_id
 left join webmasters  w on w.id = l.webmaster_id;
 grant select on v_launches to authenticated;
-
--- ---------------------------------------------------------------------
--- 3. Синхронизация через Chrome
--- ---------------------------------------------------------------------
-alter table settings add column if not exists sheet_token text unique;
-update settings set sheet_token = replace(gen_random_uuid()::text, '-', '') where sheet_token is null;
-
-create table if not exists sheet_inbox (
-  id         uuid primary key default gen_random_uuid(),
-  owner_id   uuid not null default auth.uid(),
-  created_at timestamptz not null default now(),
-  tabs       text[] not null default '{}',   -- какие вкладки прочитаны
-  rows       int not null default 0,
-  body       text not null,                  -- строки в формате таблицы (табы), вместе со шапкой
-  used_at    timestamptz                     -- когда подставили на странице загрузки
-);
-create index if not exists sheet_inbox_owner on sheet_inbox (owner_id, created_at desc);
-alter table sheet_inbox enable row level security;
-drop policy if exists own_rows on sheet_inbox;
-create policy own_rows on sheet_inbox for all to authenticated using (owner_id = auth.uid()) with check (owner_id = auth.uid());
-grant all on sheet_inbox to authenticated;
-
--- Вызывается из вкладки гугл-таблицы, без входа в Offerdesk — только с токеном.
-create or replace function sheet_push(p_token text, p_tabs text[], p_rows int, p_body text) returns jsonb
-language plpgsql security definer set search_path = public as $$
-declare v_owner uuid; v_id uuid;
-begin
-  select owner_id into v_owner from settings where sheet_token = p_token and length(coalesce(p_token, '')) >= 16;
-  if v_owner is null then raise exception 'Неверный токен синхронизации' using errcode = '28000'; end if;
-  if length(coalesce(p_body, '')) = 0 or length(p_body) > 5000000 then raise exception 'Пустые или слишком большие данные'; end if;
-  insert into sheet_inbox (owner_id, tabs, rows, body) values (v_owner, coalesce(p_tabs, '{}'), coalesce(p_rows, 0), p_body)
-  returning id into v_id;
-  -- храним последние 30 синхронизаций
-  delete from sheet_inbox where owner_id = v_owner and id not in
-    (select id from sheet_inbox where owner_id = v_owner order by created_at desc limit 30);
-  return jsonb_build_object('id', v_id, 'rows', p_rows);
-end $$;
-revoke all on function sheet_push(text, text[], int, text) from public;
-grant execute on function sheet_push(text, text[], int, text) to anon, authenticated;
-
--- Новый токен (старый перестаёт работать)
-create or replace function sheet_new_token() returns text language sql security invoker as $$
-  insert into settings (owner_id, sheet_token) values (auth.uid(), replace(gen_random_uuid()::text, '-', ''))
-  on conflict (owner_id) do update set sheet_token = excluded.sheet_token
-  returning sheet_token
-$$;
-grant execute on function sheet_new_token() to authenticated;
 
 commit;
 

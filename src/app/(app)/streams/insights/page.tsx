@@ -26,6 +26,7 @@ type S = {
   ftd: number | null;
   free_cap_id: string | null;
   days_no_ftd: number;
+  poured_after_stop: boolean | null;
 };
 
 const VIEWS = {
@@ -49,7 +50,7 @@ function monthProgress() {
 }
 
 const FLAGS = {
-  stop_pouring: { label: "Льётся на стоп", cls: "bg-rose-100 text-rose-800", hint: "Есть FTD на потоке со стопом — риск неоплаты" },
+  stop_pouring: { label: "Льётся после стопа", cls: "bg-rose-100 text-rose-800", hint: "Депы прибавились после даты стопа — риск неоплаты" },
   full: { label: "Капа выбрана", cls: "bg-rose-50 text-rose-700", hint: "Отлито не меньше капы — просить ап или останавливать" },
   near: { label: "Упрёмся в капу", cls: "bg-amber-50 text-amber-800", hint: "Выбрано 70%+ или по темпу капа кончится до конца месяца — просить ап" },
   idle: { label: "Капа простаивает", cls: "bg-slate-100 text-slate-700", hint: "Капа есть, FTD нет — пушить, отдать в подмену или снять" },
@@ -198,7 +199,7 @@ export default async function StreamInsightsPage({ searchParams }: { searchParam
       const forecast = Math.round((r.ftd / Math.max(day, 1)) * days);
       const pct = r.cap ? Math.round((r.ftd / r.cap) * 100) : null;
       let flag: Flag | null = null;
-      if (r.streams.some((s) => isStopped(s) && ftd(s) > 0)) flag = "stop_pouring";
+      if (r.streams.some((s) => s.poured_after_stop)) flag = "stop_pouring";
       else if (r.cap && r.ftd >= r.cap) flag = "full";
       else if (r.cap && (r.ftd / r.cap >= 0.7 || forecast >= r.cap)) flag = "near";
       else if (r.cap && r.ftd === 0 && r.streams.some(isActive)) flag = "idle";

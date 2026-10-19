@@ -25,6 +25,10 @@ type S = StreamFormRow & {
   free_cap_id: string | null;
   is_new: boolean;
   changed_at: string;
+  actualized_on: string | null;
+  ftd_after_stop: number | null;
+  poured_after_stop: boolean | null;
+  stop_without_date: boolean | null;
 };
 
 const isStopped = (s: { stage: string }) => ["stopped", "no_traffic"].includes(s.stage);
@@ -103,6 +107,8 @@ export default async function StreamsPage({ searchParams }: { searchParams: Prom
     );
 
   const silent = all.filter(notPouring);
+  const afterStop = all.filter((s) => s.poured_after_stop);
+  const stopNoDate = all.filter((s) => s.stop_without_date && (s.ftd ?? 0) > 0).length;
   const staleCount = silent.length;
   const movedCount = all.filter((s) => s.free_cap_id).length;
   const newCount = all.filter((s) => s.is_new).length;
@@ -192,6 +198,27 @@ export default async function StreamsPage({ searchParams }: { searchParams: Prom
           </Link>
         )}
       </form>
+
+      {afterStop.length > 0 && (
+        <div className="mb-4 rounded-xl border border-rose-300 bg-rose-100/60 p-4 text-sm text-rose-900">
+          <div className="mb-2 font-semibold">Льётся после стопа: {afterStop.length} — риск неоплаты, уточни у менеджеров</div>
+          <ul className="space-y-0.5">
+            {afterStop.map((s) => (
+              <li key={s.id}>
+                {s.advertiser_name} · <b>{s.offer_name}</b> {s.geo_code}
+                {s.source_code ? ` [${s.source_code}]` : ""} · ID {s.adv_stream_id}
+                {s.sub_id ? ` → ${s.sub_id}` : ""} · стоп с {s.actualized_on ? new Date(s.actualized_on).toLocaleDateString("ru-RU", { day: "2-digit", month: "2-digit" }) : "?"}
+                {s.ftd_after_stop ? ` · +${s.ftd_after_stop} FTD после стопа` : ` · отлито ${s.ftd ?? 0}, росло после даты стопа`} · {s.manager_name ?? "без менеджера"}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+      {stopNoDate > 0 && (
+        <p className="mb-4 text-xs text-amber-700">
+          У {stopNoDate} потоков на стопе нет «Даты актуализации» в таблице — без неё не видно, льются ли они после стопа.
+        </p>
+      )}
 
       {silent.length > 0 && (
         <details className="mb-4 rounded-xl border border-rose-200 bg-rose-50/50 p-4">
