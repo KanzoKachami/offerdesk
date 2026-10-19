@@ -232,6 +232,7 @@ export function parseStreams(text: string, defaultStage: string): ParsedImport {
       rate: rateRaw && Number.isFinite(rateNum) && rateNum > 0 ? rateNum : null,
       currency: rateRaw.includes("€") || /eur/i.test(rateRaw) ? "EUR" : "USD",
       cap: capStream ?? capMonth,
+      cap_month: capMonth,
       kpi,
       ftd,
       issued_on,

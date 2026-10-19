@@ -124,6 +124,9 @@ export default async function StreamsPage({ searchParams }: { searchParams: Prom
         subtitle={`Всего: ${all.length} · новых за сутки: ${newCount} · не льют ${NO_FTD_DAYS}+ дней: ${staleCount}${movedCount ? ` · ушли в свободные капы: ${movedCount}` : ""}`}
         actions={
           <>
+            <Link href="/streams/insights" className={btnCls.secondary}>
+              Разрезы
+            </Link>
             <Link href="/streams/import" className={btnCls.secondary}>
               Загрузить из таблицы
             </Link>

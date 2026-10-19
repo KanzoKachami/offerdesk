@@ -150,6 +150,7 @@ export type ImportRow = {
   rate: number | null;
   currency: "USD" | "EUR";
   cap: number | null;
+  cap_month?: number | null; // «КАП <МЕСЯЦ> НА ID» — сколько рекл дал на свой ID в этом месяце
   kpi: boolean | null;
   ftd?: number | null; // «Отлито» — депы за текущий месяц
   issued_on?: string | null; // дата выдачи потока, YYYY-MM-DD
@@ -182,7 +183,7 @@ export async function importStreams(_prev: ImportState, fd: FormData): Promise<I
     sb.from("geos").select("code"),
     sb.from("offers").select("id, name, geos"),
     sb.from("managers").select("id, name"),
-    sb.from("launches").select("id, adv_stream_id, sub_id, geo_code, offer_id, webmaster, stage, cap, rate, currency, kpi, manager_id, notes, source_code, approach_code, ftd, issued_on"),
+    sb.from("launches").select("id, adv_stream_id, sub_id, geo_code, offer_id, webmaster, stage, cap, rate, currency, kpi, manager_id, notes, source_code, approach_code, ftd, issued_on, cap_month"),
     sb.from("advertisers").select("id, name"),
   ]);
   const advByName = new Map((advs ?? []).map((a) => [String(a.name).toLowerCase(), a.id as string]));
@@ -204,7 +205,7 @@ export async function importStreams(_prev: ImportState, fd: FormData): Promise<I
   const managerByName = new Map((managers ?? []).map((m) => [String(m.name).toLowerCase(), m.id as string]));
   // Как узнать «ту же строку» при ежедневной загрузке: по ID у рекла + подмене + гео,
   // а если ID нет — по продукту + гео + вебу.
-  type Ex = { id: string; adv_stream_id: string | null; sub_id: string | null; geo_code: string; offer_id: string | null; webmaster: string | null; stage: string; cap: number | null; rate: number | null; currency: string; kpi: boolean | null; manager_id: string | null; notes: string | null; source_code: string | null; approach_code: string | null; ftd: number | null; issued_on: string | null };
+  type Ex = { id: string; adv_stream_id: string | null; sub_id: string | null; geo_code: string; offer_id: string | null; webmaster: string | null; stage: string; cap: number | null; rate: number | null; currency: string; kpi: boolean | null; manager_id: string | null; notes: string | null; source_code: string | null; approach_code: string | null; ftd: number | null; issued_on: string | null; cap_month: number | null };
   const key = (adv: string | null, sub: string | null, geo: string, offerId: string | null, web: string | null) =>
     adv ? `id|${adv}|${sub ?? ""}|${geo}` : `w|${offerId ?? ""}|${geo}|${(web ?? "").toLowerCase()}`;
   const byKey = new Map<string, Ex | null>();
@@ -294,6 +295,7 @@ export async function importStreams(_prev: ImportState, fd: FormData): Promise<I
         notes: r.notes,
         ftd: r.ftd ?? null,
         issued_on: r.issued_on ?? null,
+        cap_month: r.cap_month ?? null,
       };
       const patch: Record<string, unknown> = {};
       for (const [f, v] of Object.entries(next)) {
@@ -333,6 +335,7 @@ export async function importStreams(_prev: ImportState, fd: FormData): Promise<I
       notes: r.notes,
       ftd: r.ftd ?? null,
       issued_on: r.issued_on ?? null,
+      cap_month: r.cap_month ?? null,
       issued_at: ["integrated", "live", "no_traffic", "stopped"].includes(stage) ? new Date().toISOString() : null,
       seen_at: new Date().toISOString(),
     });
